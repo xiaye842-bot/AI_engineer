@@ -135,6 +135,32 @@ function createPreviewTasks(): TaskApi {
       workspace.activeTaskId = taskId;
       return structuredClone(workspace);
     },
+    archiveTask: async (taskId) => {
+      const task = workspace.tasks.find((item) => item.id === taskId);
+      if (task) task.archivedAt = new Date().toISOString();
+      let next = workspace.tasks.find((item) => !item.archivedAt);
+      if (!next) {
+        next = createEngineeringTask(crypto.randomUUID(), { title: "新建快速任务", mode: "quick", taskType: "常规咨询" }, new Date().toISOString());
+        workspace.tasks.unshift(next);
+      }
+      workspace.activeTaskId = next.id;
+      return structuredClone(workspace);
+    },
+    restoreTask: async (taskId) => {
+      const task = workspace.tasks.find((item) => item.id === taskId);
+      if (task) delete task.archivedAt;
+      return structuredClone(workspace);
+    },
+    deleteTask: async (taskId) => {
+      workspace.tasks = workspace.tasks.filter((item) => item.id !== taskId);
+      let next = workspace.tasks.find((item) => !item.archivedAt);
+      if (!next) {
+        next = createEngineeringTask(crypto.randomUUID(), { title: "新建快速任务", mode: "quick", taskType: "常规咨询" }, new Date().toISOString());
+        workspace.tasks.unshift(next);
+      }
+      workspace.activeTaskId = next.id;
+      return structuredClone(workspace);
+    },
     updateMetadata: async (taskId, patch) => updateTask(taskId, (task) => Object.assign(task, patch)),
     updateRequirements: async (taskId, patch) =>
       updateTask(taskId, (task) => Object.assign(task.requirements, patch)),

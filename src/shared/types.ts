@@ -64,6 +64,9 @@ export interface TaskApi {
   initialize: () => Promise<TaskWorkspace>;
   createTask: (input: CreateTaskInput) => Promise<TaskWorkspace>;
   selectTask: (taskId: string) => Promise<TaskWorkspace>;
+  archiveTask: (taskId: string) => Promise<TaskWorkspace>;
+  restoreTask: (taskId: string) => Promise<TaskWorkspace>;
+  deleteTask: (taskId: string) => Promise<TaskWorkspace>;
   updateMetadata: (
     taskId: string,
     patch: { title?: string; description?: string },

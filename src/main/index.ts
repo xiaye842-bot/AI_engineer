@@ -246,6 +246,18 @@ function registerTaskIpc(): void {
     await disposeSession();
     return taskStore.selectTask(taskId);
   });
+  ipcMain.handle("tasks:archive", async (_event, taskId: string) => {
+    await disposeSession();
+    return taskStore.archiveTask(taskId);
+  });
+  ipcMain.handle("tasks:restore", async (_event, taskId: string) => {
+    await disposeSession();
+    return taskStore.restoreTask(taskId);
+  });
+  ipcMain.handle("tasks:delete", async (_event, taskId: string) => {
+    await disposeSession();
+    return taskStore.deleteTask(taskId);
+  });
   ipcMain.handle("tasks:update-metadata", (_event, payload) =>
     taskStore.updateMetadata(payload.taskId, payload.patch),
   );

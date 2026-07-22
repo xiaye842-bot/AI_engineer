@@ -14,7 +14,7 @@ import type {
 } from "../shared/task-types.js";
 
 interface TaskDatabase {
-  schemaVersion: 2;
+  schemaVersion: 3;
   activeTaskId: string;
   tasks: EngineeringTaskPackage[];
 }
@@ -44,6 +44,51 @@ export class TaskStore {
     return this.mutate(async (database) => {
       this.requireTask(database, taskId);
       database.activeTaskId = taskId;
+      return this.snapshot(database);
+    });
+  }
+
+  async archiveTask(taskId: string): Promise<TaskWorkspace> {
+    return this.mutate(async (database) => {
+      const task = this.requireTask(database, taskId);
+      const now = new Date().toISOString();
+      task.archivedAt = now;
+      task.updatedAt = now;
+      task.auditTrail.push({
+        id: randomUUID(),
+        action: "task_archived",
+        actor: "工程师",
+        detail: "归档工程任务",
+        createdAt: now,
+      });
+      this.ensureActiveTask(database, taskId);
+      return this.snapshot(database);
+    });
+  }
+
+  async restoreTask(taskId: string): Promise<TaskWorkspace> {
+    return this.mutate(async (database) => {
+      const task = this.requireTask(database, taskId);
+      const now = new Date().toISOString();
+      delete task.archivedAt;
+      task.updatedAt = now;
+      task.auditTrail.push({
+        id: randomUUID(),
+        action: "task_restored",
+        actor: "工程师",
+        detail: "从归档区恢复工程任务",
+        createdAt: now,
+      });
+      return this.snapshot(database);
+    });
+  }
+
+  async deleteTask(taskId: string): Promise<TaskWorkspace> {
+    return this.mutate(async (database) => {
+      const index = database.tasks.findIndex((task) => task.id === taskId);
+      if (index < 0) throw new Error("工程任务不存在。");
+      database.tasks.splice(index, 1);
+      this.ensureActiveTask(database, taskId);
       return this.snapshot(database);
     });
   }
@@ -175,7 +220,7 @@ export class TaskStore {
       const parsed = JSON.parse(raw) as TaskDatabase & { schemaVersion: number };
       if (!Array.isArray(parsed.tasks)) throw new Error("unsupported schema");
       this.database = this.migrate(parsed);
-      if (parsed.schemaVersion !== 2) await this.persist(this.database);
+      if (parsed.schemaVersion !== 3) await this.persist(this.database);
     } catch (error) {
       const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
       if (code !== "ENOENT") {
@@ -187,7 +232,7 @@ export class TaskStore {
         mode: "workflow",
         taskType: "功能开发",
       }, now);
-      this.database = { schemaVersion: 2, activeTaskId: task.id, tasks: [task] };
+      this.database = { schemaVersion: 3, activeTaskId: task.id, tasks: [task] };
       await this.persist(this.database);
     }
   }
@@ -200,15 +245,34 @@ export class TaskStore {
 
   private migrate(source: TaskDatabase & { schemaVersion: number }): TaskDatabase {
     return {
-      schemaVersion: 2,
+      schemaVersion: 3,
       activeTaskId: source.activeTaskId,
       tasks: source.tasks.map((task) => ({
         ...task,
-        schemaVersion: 2,
+        schemaVersion: 3,
         mode: task.mode ?? "workflow",
         taskType: task.taskType ?? "功能开发",
+        archivedAt: task.archivedAt,
       })),
     };
+  }
+
+  private ensureActiveTask(database: TaskDatabase, changedTaskId: string): void {
+    const activeTask = database.tasks.find((task) => task.id === database.activeTaskId);
+    if (database.activeTaskId !== changedTaskId && activeTask && !activeTask.archivedAt) return;
+    const nextTask = database.tasks.find((task) => !task.archivedAt);
+    if (nextTask) {
+      database.activeTaskId = nextTask.id;
+      return;
+    }
+    const now = new Date().toISOString();
+    const fallback = createEngineeringTask(randomUUID(), {
+      title: "新建快速任务",
+      mode: "quick",
+      taskType: "常规咨询",
+    }, now);
+    database.tasks.unshift(fallback);
+    database.activeTaskId = fallback.id;
   }
 
   private snapshot(database = this.database!): TaskWorkspace {

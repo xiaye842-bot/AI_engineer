@@ -60,8 +60,39 @@ test("persists task package data and enforces sequential stage transitions", asy
     assert.ok(restored.auditTrail.some((entry) => entry.action === "stage_confirmed"));
     assert.ok(restored.auditTrail.some((entry) => entry.action === "capability_activated"));
 
-    const persisted = JSON.parse(await readFile(filePath, "utf8")) as { schemaVersion: number };
-    assert.equal(persisted.schemaVersion, 2);
+    const persisted = JSON.parse(await readFile(filePath, "utf8")) as { schemaVersion: number; tasks: Array<Record<string, unknown>> };
+    assert.equal(persisted.schemaVersion, 3);
+    persisted.schemaVersion = 2;
+    persisted.tasks.forEach((task) => { task.schemaVersion = 2; });
+    await writeFile(filePath, JSON.stringify(persisted), "utf8");
+    const migrated = await new TaskStore(filePath).initialize();
+    assert.equal(migrated.tasks[0].schemaVersion, 3);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("archives, restores, deletes, and preserves an active task", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "engineering-task-lifecycle-"));
+  try {
+    const store = new TaskStore(join(directory, "tasks.json"));
+    const initial = await store.initialize();
+    const firstTaskId = initial.activeTaskId;
+    const created = await store.createTask({ title: "待归档任务", mode: "quick", taskType: "常规咨询" });
+    const archivedId = created.activeTaskId;
+
+    const archived = await store.archiveTask(archivedId);
+    assert.ok(archived.tasks.find((task) => task.id === archivedId)?.archivedAt);
+    assert.notEqual(archived.activeTaskId, archivedId);
+    assert.equal(archived.activeTaskId, firstTaskId);
+
+    const restored = await store.restoreTask(archivedId);
+    assert.equal(restored.tasks.find((task) => task.id === archivedId)?.archivedAt, undefined);
+    assert.ok(restored.tasks.find((task) => task.id === archivedId)?.auditTrail.some((entry) => entry.action === "task_restored"));
+
+    const deleted = await store.deleteTask(archivedId);
+    assert.equal(deleted.tasks.some((task) => task.id === archivedId), false);
+    assert.ok(deleted.tasks.some((task) => task.id === deleted.activeTaskId && !task.archivedAt));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

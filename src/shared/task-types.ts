@@ -82,14 +82,14 @@ export interface DecisionRecord {
 
 export interface AuditEntry {
   id: string;
-  action: "task_created" | "task_updated" | "stage_confirmed" | "evidence_added" | "capability_activated";
+  action: "task_created" | "task_updated" | "stage_confirmed" | "evidence_added" | "capability_activated" | "task_archived" | "task_restored";
   actor: string;
   detail: string;
   createdAt: string;
 }
 
 export interface EngineeringTaskPackage {
-  schemaVersion: 2;
+  schemaVersion: 3;
   id: string;
   title: string;
   description: string;
@@ -106,6 +106,7 @@ export interface EngineeringTaskPackage {
   auditTrail: AuditEntry[];
   createdAt: string;
   updatedAt: string;
+  archivedAt?: string;
 }
 
 export interface TaskWorkspace {

@@ -1,5 +1,7 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Archive,
+  ArchiveRestore,
   Bot,
   Check,
   ChevronDown,
@@ -14,6 +16,7 @@ import {
   MessageSquareText,
   PanelRightClose,
   PanelRightOpen,
+  Pencil,
   Plus,
   Puzzle,
   RefreshCw,
@@ -22,6 +25,7 @@ import {
   Settings2,
   ShieldCheck,
   Square,
+  Trash2,
   Workflow,
   X,
   Zap,
@@ -73,16 +77,35 @@ const agentApi = getAgentApi();
 const taskApi = getTaskApi();
 const capabilityApi = getCapabilityApi();
 
+type ConfirmTaskAction = {
+  kind: "archive" | "delete";
+  task: EngineeringTaskPackage;
+};
+
+function formatUpdatedAt(value: string, includeYear = false): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "时间未知";
+  return new Intl.DateTimeFormat("zh-CN", {
+    ...(includeYear ? { year: "numeric" } : {}),
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
 function App() {
   const previewView = new URLSearchParams(window.location.search).get("preview");
-  const previewWorkspace = previewView === "workspace" || previewView === "new-task" || previewView === "capabilities";
+  const previewWorkspace = previewView === "workspace" || previewView === "new-task" || previewView === "capabilities" || previewView === "archive" || previewView === "history" || previewView === "confirm-delete";
   const [workspace, setWorkspace] = useState<TaskWorkspace | null>(null);
   const [messages, setMessages] = useState<EngineeringMessage[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(!previewWorkspace);
   const [evidenceOpen, setEvidenceOpen] = useState(true);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(previewView === "history");
+  const [archiveOpen, setArchiveOpen] = useState(previewView === "archive");
   const [newTaskOpen, setNewTaskOpen] = useState(previewView === "new-task");
   const [capabilityOpen, setCapabilityOpen] = useState(previewView === "capabilities");
   const [capabilityCatalog, setCapabilityCatalog] = useState<CapabilityCatalog | null>(null);
@@ -103,6 +126,9 @@ function App() {
   const [conclusion, setConclusion] = useState("");
   const [evidenceDraft, setEvidenceDraft] = useState<EvidenceDraft>(emptyEvidence);
   const [newTaskDraft, setNewTaskDraft] = useState<CreateTaskInput>(emptyNewTask);
+  const [renameTarget, setRenameTarget] = useState<EngineeringTaskPackage | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [confirmTaskAction, setConfirmTaskAction] = useState<ConfirmTaskAction | null>(null);
   const [notice, setNotice] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
   const activeTaskIdRef = useRef("");
@@ -133,6 +159,7 @@ function App() {
     setDraftDescription(currentTask.description);
     const stage = currentTask.stages.find((item) => item.id === currentTask.currentStageId);
     setConclusion(stage?.conclusion ?? "");
+    if (previewView === "confirm-delete") setConfirmTaskAction({ kind: "delete", task: currentTask });
   }, [currentTask?.id, currentTask?.currentStageId]);
 
   useEffect(() => {
@@ -296,6 +323,36 @@ function App() {
     setNotice("");
   }
 
+  function openRename(task: EngineeringTaskPackage) {
+    setRenameTarget(task);
+    setRenameValue(task.title);
+  }
+
+  async function renameTask() {
+    if (!renameTarget || !renameValue.trim()) return;
+    replaceTask(await taskApi.updateMetadata(renameTarget.id, { title: renameValue.trim() }));
+    setRenameTarget(null);
+    setNotice("任务名称已更新");
+  }
+
+  async function runConfirmedTaskAction() {
+    if (!confirmTaskAction) return;
+    const { kind, task } = confirmTaskAction;
+    const next = kind === "archive"
+      ? await taskApi.archiveTask(task.id)
+      : await taskApi.deleteTask(task.id);
+    await agentApi.resetSession();
+    applyWorkspace(next);
+    setConfirmTaskAction(null);
+    setHistoryOpen(false);
+    setNotice(kind === "archive" ? "任务已归档" : "任务已永久删除");
+  }
+
+  async function restoreTask(taskId: string) {
+    applyWorkspace(await taskApi.restoreTask(taskId));
+    setNotice("任务已恢复到历史任务列表");
+  }
+
   async function saveTitle() {
     if (!currentTask || !draftTitle.trim() || draftTitle.trim() === currentTask.title) return;
     replaceTask(await taskApi.updateMetadata(currentTask.id, { title: draftTitle }));
@@ -373,6 +430,10 @@ function App() {
     ? TASK_STAGES.findIndex((stage) => stage.id === currentTask.currentStageId)
     : 0;
   const enabledCapabilityCount = capabilityCatalog?.capabilities.filter((item) => item.policy.enabled).length ?? 0;
+  const activeTasks = workspace?.tasks.filter((task) => !task.archivedAt)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) ?? [];
+  const archivedTasks = workspace?.tasks.filter((task) => task.archivedAt)
+    .sort((a, b) => (b.archivedAt ?? b.updatedAt).localeCompare(a.archivedAt ?? a.updatedAt)) ?? [];
 
   if (!currentTask || !workspace) {
     return <div className="loading-screen"><Database size={24} /><span>正在加载工程任务包...</span></div>;
@@ -390,6 +451,7 @@ function App() {
           <span className="task-name">{currentTask.title}</span>
           <span className={`mode-badge ${currentTask.mode}`}>{currentTask.mode === "workflow" ? "工程流程" : "快速模式"}</span>
           <span className={`task-status ${currentTask.status}`}>{currentTask.status === "completed" ? "已完成" : "进行中"}</span>
+          <span className="task-updated">更新于 {formatUpdatedAt(currentTask.updatedAt)}</span>
         </div>
         <div className="topbar-actions">
           <button className="model-chip" onClick={() => setSettingsOpen(true)}>
@@ -413,15 +475,27 @@ function App() {
           <button className={`nav-item ${historyOpen ? "active" : ""}`} onClick={() => setHistoryOpen((value) => !value)}>
             <History size={18} />历史任务
           </button>
+          <button className={`nav-item ${archiveOpen ? "active" : ""}`} onClick={() => setArchiveOpen(true)}>
+            <Archive size={18} />归档项目 <span className="nav-count">{archivedTasks.length}</span>
+          </button>
         </nav>
 
         {historyOpen && (
           <div className="task-history-list">
-            {workspace.tasks.map((task) => (
-              <button key={task.id} className={task.id === currentTask.id ? "selected" : ""} onClick={() => void selectTask(task.id)}>
-                <span>{task.title}</span><small>{task.taskType} · {task.mode === "workflow" ? getStageName(task.currentStageId) : "快速模式"}</small>
-              </button>
+            {activeTasks.map((task) => (
+              <div key={task.id} className={`task-history-item ${task.id === currentTask.id ? "selected" : ""}`}>
+                <button className="task-history-select" onClick={() => void selectTask(task.id)}>
+                  <span>{task.title}</span><small>{task.taskType} · {task.mode === "workflow" ? getStageName(task.currentStageId) : "快速模式"}</small>
+                  <time>更新 {formatUpdatedAt(task.updatedAt)}</time>
+                </button>
+                <div className="task-history-actions">
+                  <button title="重命名" onClick={() => openRename(task)}><Pencil size={13} /></button>
+                  <button title="归档" onClick={() => setConfirmTaskAction({ kind: "archive", task })}><Archive size={13} /></button>
+                  <button className="danger" title="删除" onClick={() => setConfirmTaskAction({ kind: "delete", task })}><Trash2 size={13} /></button>
+                </div>
+              </div>
             ))}
+            {!activeTasks.length && <div className="history-empty">暂无历史任务</div>}
           </div>
         )}
 
@@ -590,6 +664,67 @@ function App() {
             </div>
             <div className="modal-actions"><button className="secondary-button" onClick={() => setNewTaskOpen(false)}>取消</button>
               <button className="primary-button" onClick={() => void createTask()}>创建任务</button></div>
+          </section>
+        </div>
+      )}
+
+      {archiveOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setArchiveOpen(false)}>
+          <section className="archive-modal" role="dialog" aria-modal="true" aria-labelledby="archive-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-header"><div className="modal-icon"><Archive size={19} /></div>
+              <div><h2 id="archive-title">归档项目管理</h2><p>集中管理已归档的工程任务包</p></div>
+              <button className="icon-button compact" title="关闭" onClick={() => setArchiveOpen(false)}><X size={18} /></button>
+            </div>
+            <div className="archive-summary"><span>归档项目</span><strong>{archivedTasks.length}</strong></div>
+            <div className="archive-list">
+              {archivedTasks.map((task) => (
+                <article className="archive-item" key={task.id}>
+                  <div className="archive-item-main"><div><span className={`mode-badge ${task.mode}`}>{task.mode === "workflow" ? "工程流程" : "快速模式"}</span><strong>{task.title}</strong></div>
+                    <p>{task.taskType} · {task.mode === "workflow" ? getStageName(task.currentStageId) : "常规协作"}</p>
+                    <time>最后更新 {formatUpdatedAt(task.updatedAt, true)} · 归档 {formatUpdatedAt(task.archivedAt!, true)}</time></div>
+                  <div className="archive-actions">
+                    <button className="icon-button compact" title="恢复" onClick={() => void restoreTask(task.id)}><ArchiveRestore size={16} /></button>
+                    <button className="icon-button compact" title="重命名" onClick={() => openRename(task)}><Pencil size={15} /></button>
+                    <button className="icon-button compact danger" title="永久删除" onClick={() => setConfirmTaskAction({ kind: "delete", task })}><Trash2 size={15} /></button>
+                  </div>
+                </article>
+              ))}
+              {!archivedTasks.length && <div className="archive-empty"><Archive size={26} /><strong>暂无归档项目</strong><span>从历史任务列表归档后，项目会保留在这里。</span></div>}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {renameTarget && (
+        <div className="modal-backdrop dialog-backdrop" role="presentation" onMouseDown={() => setRenameTarget(null)}>
+          <section className="rename-modal" role="dialog" aria-modal="true" aria-labelledby="rename-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-header"><div className="modal-icon"><Pencil size={18} /></div>
+              <div><h2 id="rename-title">重命名任务</h2><p>任务包内容和历史记录不会改变</p></div>
+              <button className="icon-button compact" title="关闭" onClick={() => setRenameTarget(null)}><X size={18} /></button>
+            </div>
+            <div className="rename-body"><label><span>任务名称</span><input autoFocus value={renameValue} onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => {
+              if (event.key === "Enter") void renameTask();
+            }} /></label></div>
+            <div className="modal-actions"><button className="secondary-button" onClick={() => setRenameTarget(null)}>取消</button>
+              <button className="primary-button" disabled={!renameValue.trim()} onClick={() => void renameTask()}>保存名称</button></div>
+          </section>
+        </div>
+      )}
+
+      {confirmTaskAction && (
+        <div className="modal-backdrop confirmation-backdrop" role="presentation" onMouseDown={() => setConfirmTaskAction(null)}>
+          <section className="confirmation-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirmation-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className={`confirmation-icon ${confirmTaskAction.kind}`}>
+              {confirmTaskAction.kind === "archive" ? <Archive size={21} /> : <Trash2 size={21} />}
+            </div>
+            <h2 id="confirmation-title">{confirmTaskAction.kind === "archive" ? "确认归档任务？" : "确认永久删除任务？"}</h2>
+            <p>“{confirmTaskAction.task.title}”{confirmTaskAction.kind === "archive"
+              ? "将移入归档项目管理区，可随时恢复。"
+              : "及其会话、证据和审计记录将被永久删除，此操作无法撤销。"}</p>
+            <div className="modal-actions"><button className="secondary-button" onClick={() => setConfirmTaskAction(null)}>取消</button>
+              <button className={confirmTaskAction.kind === "delete" ? "danger-button" : "primary-button"} onClick={() => void runConfirmedTaskAction()}>
+                {confirmTaskAction.kind === "archive" ? "确认归档" : "永久删除"}
+              </button></div>
           </section>
         </div>
       )}

@@ -18,7 +18,7 @@ export function createEngineeringTask(id: string, input: CreateTaskInput, now: s
   };
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     id,
     title,
     description: "",
