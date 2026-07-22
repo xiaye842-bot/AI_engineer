@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AgentApi, AgentEvent, ModelConfig, TaskApi } from "../shared/types";
+import type { AgentApi, AgentEvent, CapabilityApi, ModelConfig, TaskApi } from "../shared/types";
 
 const agentApi: AgentApi = {
   getProviders: () => ipcRenderer.invoke("agent:get-providers"),
@@ -27,5 +27,13 @@ const taskApi: TaskApi = {
   appendMessage: (taskId, message) => ipcRenderer.invoke("tasks:append-message", { taskId, message }),
 };
 
+const capabilityApi: CapabilityApi = {
+  initialize: () => ipcRenderer.invoke("capabilities:initialize"),
+  refresh: () => ipcRenderer.invoke("capabilities:refresh"),
+  updatePolicy: (id, patch) => ipcRenderer.invoke("capabilities:update-policy", { id, patch }),
+  addSource: (path) => ipcRenderer.invoke("capabilities:add-source", path),
+};
+
 contextBridge.exposeInMainWorld("engineeringAgent", agentApi);
 contextBridge.exposeInMainWorld("engineeringTasks", taskApi);
+contextBridge.exposeInMainWorld("engineeringCapabilities", capabilityApi);

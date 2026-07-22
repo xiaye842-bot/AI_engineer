@@ -138,6 +138,22 @@ export class TaskStore {
     });
   }
 
+  async recordCapabilityActivation(
+    taskId: string,
+    capabilityNames: string[],
+    toolNames: string[],
+  ): Promise<EngineeringTaskPackage> {
+    return this.updateTask(taskId, (task, now) => {
+      task.auditTrail.push({
+        id: randomUUID(),
+        action: "capability_activated",
+        actor: "AI Runtime",
+        detail: `激活能力：${capabilityNames.join("、")}；工具权限：${toolNames.join("、") || "仅提示词"}`,
+        createdAt: now,
+      });
+    });
+  }
+
   private async updateTask(
     taskId: string,
     update: (task: EngineeringTaskPackage, now: string) => void,

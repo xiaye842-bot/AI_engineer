@@ -13,6 +13,33 @@
 - 需求、证据、阶段结论和审计轨迹结构化存储
 - 通用任务类型：功能开发、现场问题、测试分析、代码评审、文档方案和常规咨询
 - 常规快速模式：无阶段门禁，基于任务上下文、历史会话和关联知识材料直接回答
+- Agent 能力中心：发现、启停和自动触发 Skills/Workflows
+- 分级工具权限：仅提示词、只读文件、允许写入、允许执行命令
+- 能力激活与实际工具权限写入任务审计轨迹
+
+## Skills 与 Workflows
+
+项目原生兼容 [Agent Skills](https://agentskills.io) 的 `SKILL.md` 目录结构，可直接发现以下位置：
+
+- `.agents/skills/`、`.pi/skills/`
+- `.claude/skills/`、`.codex/skills/`
+- 能力中心中添加的任意外部目录
+- Electron 用户目录下的 `capabilities/skills/`
+
+Workflow 使用 Markdown 文件，支持 `WORKFLOW.md`、Pi prompt、Claude command 等常见纯文本工作流来源。默认扫描 `.agents/workflows/`、`.agents/prompts/`、`.pi/workflows/`、`.pi/prompts/`、`.claude/commands/` 和 `.codex/workflows/`。建议通过 frontmatter 声明路由信息：
+
+```markdown
+---
+name: feature-development
+description: Feature development workflow from requirements through archive.
+task-types: 功能开发
+modes: workflow
+triggers: 需求分析,方案设计,测试验证
+gates: 需求确认,方案评审,测试结论确认
+---
+```
+
+能力默认禁用。启用后可按任务类型、工作模式和触发词自动激活，也可使用 `/skill:name` 或 `/workflow:name` 显式调用。Workflow 默认只在工程流程模式自动触发；快速模式不会被流程能力接管，除非用户显式调用或在清单中声明 `modes: quick`。
 
 ## 数据存储
 
@@ -44,4 +71,4 @@ npm test
 
 ## 当前安全边界
 
-首版通过 `noTools: "all"` 禁用了 Pi 的代码读写与命令工具，仅验证模型交互。后续开放代码分析、测试执行等能力时，应在主进程增加工作区边界、工具白名单、操作审批和审计日志。
+所有能力默认关闭且没有工具权限。用户在能力中心授权后，运行时才按当前触发能力开放对应 Pi 工具：只读权限包含 `read/grep/find/ls`，写入权限增加 `edit/write`，命令权限再增加 `bash`。第三方 Skill 和 Workflow 仍需人工审查；当前工具边界限制在应用工作目录，后续接入真实工程仓库时还需增加工作区选择、路径白名单和高风险命令审批。

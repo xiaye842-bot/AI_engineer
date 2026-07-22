@@ -82,7 +82,7 @@ export interface DecisionRecord {
 
 export interface AuditEntry {
   id: string;
-  action: "task_created" | "task_updated" | "stage_confirmed" | "evidence_added";
+  action: "task_created" | "task_updated" | "stage_confirmed" | "evidence_added" | "capability_activated";
   actor: string;
   detail: string;
   createdAt: string;

@@ -11,8 +11,10 @@
   "include": [
     "src/shared/task-types.ts",
     "src/shared/task-state-machine.ts",
+    "src/shared/capability-types.ts",
     "src/main/task-store.ts",
+    "src/main/prompt-builder.ts",
+    "src/main/capability-registry.ts",
     "tests/task-store.test.ts"
   ]
 }
-

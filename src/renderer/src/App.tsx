@@ -15,6 +15,8 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Plus,
+  Puzzle,
+  RefreshCw,
   Search,
   Send,
   Settings2,
@@ -24,6 +26,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import type { CapabilityCatalog, CapabilityPermission } from "../../shared/capability-types";
 import { calculateCompleteness, getStageName } from "../../shared/task-state-machine";
 import {
   TASK_STAGES,
@@ -37,7 +40,7 @@ import {
   type TaskWorkspace,
 } from "../../shared/task-types";
 import type { AgentEvent, ModelConfig, ProviderOption } from "../../shared/types";
-import { getAgentApi, getTaskApi } from "./dev-agent";
+import { getAgentApi, getCapabilityApi, getTaskApi } from "./dev-agent";
 
 const defaultConfig: ModelConfig = {
   provider: "openai",
@@ -68,10 +71,11 @@ const requirementLabels: Array<{ key: keyof TaskRequirements; label: string; pla
 
 const agentApi = getAgentApi();
 const taskApi = getTaskApi();
+const capabilityApi = getCapabilityApi();
 
 function App() {
   const previewView = new URLSearchParams(window.location.search).get("preview");
-  const previewWorkspace = previewView === "workspace" || previewView === "new-task";
+  const previewWorkspace = previewView === "workspace" || previewView === "new-task" || previewView === "capabilities";
   const [workspace, setWorkspace] = useState<TaskWorkspace | null>(null);
   const [messages, setMessages] = useState<EngineeringMessage[]>([]);
   const [input, setInput] = useState("");
@@ -80,6 +84,9 @@ function App() {
   const [evidenceOpen, setEvidenceOpen] = useState(true);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [newTaskOpen, setNewTaskOpen] = useState(previewView === "new-task");
+  const [capabilityOpen, setCapabilityOpen] = useState(previewView === "capabilities");
+  const [capabilityCatalog, setCapabilityCatalog] = useState<CapabilityCatalog | null>(null);
+  const [capabilitySource, setCapabilitySource] = useState("");
   const [evidenceFormOpen, setEvidenceFormOpen] = useState(false);
   const [providers, setProviders] = useState<ProviderOption[]>([]);
   const [config, setConfig] = useState<ModelConfig>(defaultConfig);
@@ -107,9 +114,10 @@ function App() {
   );
 
   useEffect(() => {
-    void Promise.all([agentApi.getProviders(), taskApi.initialize()]).then(([providerOptions, initial]) => {
+    void Promise.all([agentApi.getProviders(), taskApi.initialize(), capabilityApi.initialize()]).then(([providerOptions, initial, catalog]) => {
       setProviders(providerOptions);
       applyWorkspace(initial);
+      setCapabilityCatalog(catalog);
     }).catch((error: unknown) => {
       setNotice(error instanceof Error ? error.message : "应用初始化失败");
     });
@@ -152,6 +160,7 @@ function App() {
     if (event.taskId !== activeTaskIdRef.current) return;
     if (event.type === "started") {
       setStreaming(true);
+      if (event.capabilities?.length) setNotice(`已自动激活：${event.capabilities.join("、")}`);
       setMessages((current) => [
         ...current,
         {
@@ -331,11 +340,39 @@ function App() {
     }
   }
 
+  async function updateCapabilityPolicy(
+    id: string,
+    patch: { enabled?: boolean; autoTrigger?: boolean; permission?: CapabilityPermission },
+  ) {
+    try {
+      setCapabilityCatalog(await capabilityApi.updatePolicy(id, patch));
+      setNotice("能力设置已保存，下轮对话生效");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "能力设置保存失败");
+    }
+  }
+
+  async function addCapabilitySource() {
+    try {
+      setCapabilityCatalog(await capabilityApi.addSource(capabilitySource));
+      setCapabilitySource("");
+      setNotice("外部能力目录已加入并完成扫描");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "能力目录添加失败");
+    }
+  }
+
+  async function refreshCapabilities() {
+    setCapabilityCatalog(await capabilityApi.refresh());
+    setNotice("能力目录已重新扫描");
+  }
+
   const currentProvider = providers.find((provider) => provider.id === draftConfig.provider);
   const completeness = currentTask ? calculateCompleteness(currentTask) : 0;
   const currentStageIndex = currentTask
     ? TASK_STAGES.findIndex((stage) => stage.id === currentTask.currentStageId)
     : 0;
+  const enabledCapabilityCount = capabilityCatalog?.capabilities.filter((item) => item.policy.enabled).length ?? 0;
 
   if (!currentTask || !workspace) {
     return <div className="loading-screen"><Database size={24} /><span>正在加载工程任务包...</span></div>;
@@ -370,6 +407,9 @@ function App() {
           <button className="nav-item active"><MessageSquareText size={18} />任务协作</button>
           <button className="nav-item"><Search size={18} />知识检索</button>
           <button className="nav-item"><FileCheck2 size={18} />证据中心</button>
+          <button className={`nav-item ${capabilityOpen ? "active" : ""}`} onClick={() => setCapabilityOpen(true)}>
+            <Puzzle size={18} />能力中心
+          </button>
           <button className={`nav-item ${historyOpen ? "active" : ""}`} onClick={() => setHistoryOpen((value) => !value)}>
             <History size={18} />历史任务
           </button>
@@ -443,7 +483,7 @@ function App() {
           <form className="composer" onSubmit={submit}>
             <textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={handleKeyDown}
               placeholder="描述功能目标、现场现象或需要澄清的问题..." rows={3} disabled={streaming || currentTask.status === "completed"} />
-            <div className="composer-footer"><span>{currentTask.mode === "workflow" ? `当前阶段：${getStageName(currentTask.currentStageId)}` : `任务类型：${currentTask.taskType}`}</span>
+            <div className="composer-footer"><span>{currentTask.mode === "workflow" ? `当前阶段：${getStageName(currentTask.currentStageId)}` : `快速模式 · 已启用 ${enabledCapabilityCount} 项能力`}</span>
               {streaming ? (
                 <button className="send-button stop" type="button" title="停止生成" onClick={() => void agentApi.abort()}><Square size={15} fill="currentColor" /></button>
               ) : (
@@ -550,6 +590,42 @@ function App() {
             </div>
             <div className="modal-actions"><button className="secondary-button" onClick={() => setNewTaskOpen(false)}>取消</button>
               <button className="primary-button" onClick={() => void createTask()}>创建任务</button></div>
+          </section>
+        </div>
+      )}
+
+      {capabilityOpen && capabilityCatalog && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setCapabilityOpen(false)}>
+          <section className="capability-modal" role="dialog" aria-modal="true" aria-labelledby="capability-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-header"><div className="modal-icon"><Puzzle size={19} /></div>
+              <div><h2 id="capability-title">Agent 能力中心</h2><p>管理 Skills、Workflows、自动触发与运行权限</p></div>
+              <div className="modal-header-actions"><button className="icon-button compact" title="重新扫描" onClick={() => void refreshCapabilities()}><RefreshCw size={16} /></button>
+                <button className="icon-button compact" title="关闭" onClick={() => setCapabilityOpen(false)}><X size={18} /></button></div>
+            </div>
+            <div className="capability-source-row">
+              <input value={capabilitySource} placeholder="添加外部 Skills/Workflows 目录" onChange={(event) => setCapabilitySource(event.target.value)} />
+              <button className="secondary-button" disabled={!capabilitySource.trim()} onClick={() => void addCapabilitySource()}>添加目录</button>
+            </div>
+            <div className="managed-paths"><span>标准 Skill：{capabilityCatalog.managedSkillPath}</span><span>Markdown Workflow：{capabilityCatalog.managedWorkflowPath}</span></div>
+            <div className="capability-list">
+              {capabilityCatalog.capabilities.map((capability) => (
+                <article className="capability-item" key={capability.id}>
+                  <div className="capability-main"><div className="capability-title-row"><span className={`capability-kind ${capability.kind}`}>{capability.kind === "skill" ? "SKILL" : "WORKFLOW"}</span><strong>{capability.name}</strong></div>
+                    <p>{capability.description}</p><small>{capability.taskTypes.length ? `适用：${capability.taskTypes.join("、")}` : "通用能力"}{capability.taskModes.length ? ` · ${capability.taskModes.map((mode) => mode === "workflow" ? "流程模式" : "快速模式").join("、")}` : ""}{capability.gates.length ? ` · ${capability.gates.length} 项人工门禁` : ""}</small>
+                    <code>/{capability.kind}:{capability.name}</code></div>
+                  <div className="capability-controls">
+                    <label><input type="checkbox" checked={capability.policy.enabled} onChange={(event) => void updateCapabilityPolicy(capability.id, { enabled: event.target.checked })} />启用</label>
+                    <label><input type="checkbox" checked={capability.policy.autoTrigger} disabled={!capability.policy.enabled} onChange={(event) => void updateCapabilityPolicy(capability.id, { autoTrigger: event.target.checked })} />自动触发</label>
+                    <select aria-label={`${capability.name} 权限`} value={capability.policy.permission} disabled={!capability.policy.enabled}
+                      onChange={(event) => void updateCapabilityPolicy(capability.id, { permission: event.target.value as CapabilityPermission })}>
+                      <option value="none">仅提示词</option><option value="read">只读文件</option><option value="write">允许写入</option><option value="execute">允许执行命令</option>
+                    </select>
+                  </div>
+                </article>
+              ))}
+              {!capabilityCatalog.capabilities.length && <div className="empty-state"><Puzzle size={22} /><span>尚未发现可用的 Skill 或 Workflow</span></div>}
+            </div>
+            <div className="capability-footnote">第三方能力可能包含可执行指令。启用前请审查内容，命令执行权限应仅授予可信来源。</div>
           </section>
         </div>
       )}

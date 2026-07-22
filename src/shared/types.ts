@@ -21,7 +21,7 @@ export interface ProviderOption {
 }
 
 export type AgentEvent =
-  | { type: "started"; taskId: string; messageId: string }
+  | { type: "started"; taskId: string; messageId: string; capabilities?: string[]; tools?: string[] }
   | { type: "delta"; taskId: string; messageId: string; text: string }
   | { type: "completed"; taskId: string; messageId: string }
   | { type: "aborted"; taskId: string; messageId: string }
@@ -38,6 +38,15 @@ export interface AgentApi {
   abort: () => Promise<void>;
   resetSession: () => Promise<void>;
   onEvent: (listener: (event: AgentEvent) => void) => () => void;
+}
+
+import type { CapabilityCatalog, CapabilityPolicyPatch } from "./capability-types.js";
+
+export interface CapabilityApi {
+  initialize: () => Promise<CapabilityCatalog>;
+  refresh: () => Promise<CapabilityCatalog>;
+  updatePolicy: (id: string, patch: CapabilityPolicyPatch) => Promise<CapabilityCatalog>;
+  addSource: (path: string) => Promise<CapabilityCatalog>;
 }
 
 import type {

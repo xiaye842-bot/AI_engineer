@@ -10,9 +10,11 @@ import {
   SessionManager,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
-import { getStageName } from "../shared/task-state-machine.js";
+import type { CapabilityActivation } from "../shared/capability-types.js";
 import type { EngineeringTaskPackage } from "../shared/task-types.js";
 import type { AgentEvent, ModelConfig, ProviderId, ProviderOption } from "../shared/types.js";
+import { CapabilityRegistry } from "./capability-registry.js";
+import { buildSystemPrompt, buildUserPrompt } from "./prompt-builder.js";
 import { TaskStore } from "./task-store.js";
 
 const SUPPORTED_PROVIDERS: ProviderId[] = [
@@ -38,6 +40,7 @@ let unsubscribe: (() => void) | null = null;
 let activeConfigKey = "";
 let activeRun: ActiveRun | null = null;
 let taskStore: TaskStore;
+let capabilityRegistry: CapabilityRegistry;
 
 async function getProviderOptions(): Promise<ProviderOption[]> {
   const runtime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore() });
@@ -48,54 +51,6 @@ async function getProviderOptions(): Promise<ProviderOption[]> {
       name: provider.name,
       models: runtime.getModels(provider.id).map((model) => model.id),
     }));
-}
-
-function buildSystemPrompt(task: EngineeringTaskPackage): string {
-  const requirements = Object.entries(task.requirements)
-    .map(([key, value]) => `${key}: ${value || "未补充"}`)
-    .join("\n");
-  const history = task.messages
-    .slice(-24)
-    .map((message) => `${message.role === "user" ? "工程师" : "AI"}: ${message.content}`)
-    .join("\n");
-
-  const knowledgeContext = task.evidence
-    .map((item) => `- ${item.title}（${item.type}）：${item.summary || "无摘要"}${item.source ? `；来源：${item.source}` : ""}`)
-    .join("\n");
-  const modeInstruction = task.mode === "workflow"
-    ? `当前采用工程流程模式。围绕“${getStageName(task.currentStageId)}”阶段协作，主动检查阶段信息缺口、风险和证据，并帮助形成可确认的阶段结论。`
-    : "当前采用常规快速模式。没有阶段门禁或流程流转要求，直接回答工程师的问题。回答只能依据当前任务上下文、历史会话和已关联的知识/证据材料；材料不足时明确指出，不要补造内部知识。";
-
-  return `你是公司软件工程师的工程伴随式 AI 助手。你要围绕当前工程任务持续协作。
-
-当前任务：${task.title}
-任务类型：${task.taskType}
-工作模式：${task.mode === "workflow" ? "工程流程模式" : "常规快速模式"}
-${task.mode === "workflow" ? `当前阶段：${getStageName(task.currentStageId)}` : ""}
-任务描述：${task.description || "未补充"}
-结构化需求：
-${requirements}
-
-已关联知识与证据：
-${knowledgeContext || "暂无"}
-历史对话：
-${history || "暂无"}
-
-${modeInstruction}
-回答应准确、简洁。没有证据时不要把推测表述为事实。当前未开放代码和命令工具。`;
-}
-
-function buildPrompt(task: EngineeringTaskPackage, text: string): string {
-  return `[当前工程任务上下文]
-任务：${task.title}
-类型：${task.taskType}
-模式：${task.mode === "workflow" ? "工程流程模式" : "常规快速模式"}
-${task.mode === "workflow" ? `阶段：${getStageName(task.currentStageId)}` : ""}
-需求信息：${JSON.stringify(task.requirements)}
-知识与证据：${JSON.stringify(task.evidence.map((item) => ({ title: item.title, summary: item.summary, source: item.source })))}
-
-[工程师消息]
-${text}`;
 }
 
 function emit(payload: AgentEvent): void {
@@ -116,9 +71,14 @@ async function disposeSession(): Promise<void> {
   activeConfigKey = "";
 }
 
-async function ensureSession(config: ModelConfig, task: EngineeringTaskPackage): Promise<AgentSession> {
+async function ensureSession(
+  config: ModelConfig,
+  task: EngineeringTaskPackage,
+  activation: CapabilityActivation,
+): Promise<AgentSession> {
   const keyHash = createHash("sha256").update(config.apiKey).digest("hex").slice(0, 12);
-  const configKey = `${config.provider}:${config.model}:${config.thinkingLevel}:${task.id}:${keyHash}`;
+  const capabilityKey = activation.capabilities.map((item) => item.id).sort().join(",");
+  const configKey = `${config.provider}:${config.model}:${config.thinkingLevel}:${task.id}:${keyHash}:${capabilityKey}:${activation.toolNames.join(",")}`;
   if (session && activeConfigKey === configKey) return session;
 
   await disposeSession();
@@ -134,7 +94,8 @@ async function ensureSession(config: ModelConfig, task: EngineeringTaskPackage):
   const resourceLoader = new DefaultResourceLoader({
     cwd: process.cwd(),
     agentDir: join(app.getPath("userData"), "pi"),
-    systemPromptOverride: () => buildSystemPrompt(task),
+    additionalSkillPaths: await capabilityRegistry.enabledSkillPaths(),
+    systemPromptOverride: () => buildSystemPrompt(task, activation),
   });
   await resourceLoader.reload();
 
@@ -146,6 +107,7 @@ async function ensureSession(config: ModelConfig, task: EngineeringTaskPackage):
     sessionManager: SessionManager.inMemory(process.cwd()),
     thinkingLevel: config.thinkingLevel,
     noTools: "all",
+    tools: activation.toolNames,
   });
 
   session = result.session;
@@ -195,7 +157,8 @@ function registerAgentIpc(): void {
       if (!payload.config.apiKey.trim()) throw new Error("请先填写模型 API Key。");
 
       const task = await taskStore.getTask(payload.taskId);
-      const activeSession = await ensureSession(payload.config, task);
+      const activation = await capabilityRegistry.resolveActivation(task, text);
+      const activeSession = await ensureSession(payload.config, task, activation);
       if (activeSession.isStreaming) throw new Error("模型正在回复，请稍后再发送。");
 
       await taskStore.appendMessage(task.id, {
@@ -213,10 +176,20 @@ function registerAgentIpc(): void {
         stageId: task.currentStageId,
         content: "",
       };
-      emit({ type: "started", taskId: task.id, messageId: activeRun.messageId });
+      const capabilityNames = activation.capabilities.map((item) => item.name);
+      if (capabilityNames.length) {
+        await taskStore.recordCapabilityActivation(task.id, capabilityNames, activation.toolNames);
+      }
+      emit({
+        type: "started",
+        taskId: task.id,
+        messageId: activeRun.messageId,
+        capabilities: capabilityNames,
+        tools: activation.toolNames,
+      });
 
       void activeSession
-        .prompt(buildPrompt(task, text))
+        .prompt(buildUserPrompt(task, text))
         .then(async () => {
           const lastAssistant = [...activeSession.messages]
             .reverse()
@@ -295,6 +268,22 @@ function registerTaskIpc(): void {
   );
 }
 
+function registerCapabilityIpc(): void {
+  ipcMain.handle("capabilities:initialize", () => capabilityRegistry.initialize());
+  ipcMain.handle("capabilities:refresh", async () => {
+    await disposeSession();
+    return capabilityRegistry.getCatalog();
+  });
+  ipcMain.handle("capabilities:update-policy", async (_event, payload) => {
+    await disposeSession();
+    return capabilityRegistry.updatePolicy(payload.id, payload.patch);
+  });
+  ipcMain.handle("capabilities:add-source", async (_event, path: string) => {
+    await disposeSession();
+    return capabilityRegistry.addSource(path);
+  });
+}
+
 function createWindow(): void {
   const capturePath = app.commandLine.getSwitchValue("capture-preview");
   const captureView = app.commandLine.getSwitchValue("capture-view") || "workspace";
@@ -338,9 +327,16 @@ function createWindow(): void {
 
 app.whenReady().then(async () => {
   taskStore = new TaskStore(join(app.getPath("userData"), "engineering-tasks.json"));
+  capabilityRegistry = new CapabilityRegistry(
+    process.cwd(),
+    join(app.getPath("userData"), "capability-settings.json"),
+    join(app.getPath("userData"), "capabilities"),
+  );
   await taskStore.initialize();
+  await capabilityRegistry.initialize();
   registerAgentIpc();
   registerTaskIpc();
+  registerCapabilityIpc();
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
