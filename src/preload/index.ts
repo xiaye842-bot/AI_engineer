@@ -16,7 +16,7 @@ const agentApi: AgentApi = {
 
 const taskApi: TaskApi = {
   initialize: () => ipcRenderer.invoke("tasks:initialize"),
-  createTask: (title) => ipcRenderer.invoke("tasks:create", title),
+  createTask: (input) => ipcRenderer.invoke("tasks:create", input),
   selectTask: (taskId) => ipcRenderer.invoke("tasks:select", taskId),
   updateMetadata: (taskId, patch) => ipcRenderer.invoke("tasks:update-metadata", { taskId, patch }),
   updateRequirements: (taskId, patch) => ipcRenderer.invoke("tasks:update-requirements", { taskId, patch }),

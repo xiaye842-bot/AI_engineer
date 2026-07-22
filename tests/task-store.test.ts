@@ -56,9 +56,30 @@ test("persists task package data and enforces sequential stage transitions", asy
     assert.ok(restored.auditTrail.some((entry) => entry.action === "stage_confirmed"));
 
     const persisted = JSON.parse(await readFile(filePath, "utf8")) as { schemaVersion: number };
-    assert.equal(persisted.schemaVersion, 1);
+    assert.equal(persisted.schemaVersion, 2);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
+test("creates general quick tasks without workflow transitions", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "engineering-quick-task-"));
+  try {
+    const store = new TaskStore(join(directory, "tasks.json"));
+    await store.initialize();
+    const workspace = await store.createTask({
+      title: "分析现场通信异常",
+      mode: "quick",
+      taskType: "现场问题分析",
+    });
+    const task = workspace.tasks.find((item) => item.id === workspace.activeTaskId)!;
+    assert.equal(task.mode, "quick");
+    assert.equal(task.taskType, "现场问题分析");
+    await assert.rejects(
+      () => store.advanceStage(task.id, "快速模式不应该执行阶段流转操作。"),
+      /不使用阶段流转/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

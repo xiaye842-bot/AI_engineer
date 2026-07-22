@@ -5,6 +5,7 @@ import { createEngineeringTask, transitionTask } from "../shared/task-state-mach
 import type {
   EngineeringMessage,
   EngineeringTaskPackage,
+  CreateTaskInput,
   EvidenceDraft,
   StageTransitionResult,
   TaskRequirements,
@@ -13,7 +14,7 @@ import type {
 } from "../shared/task-types.js";
 
 interface TaskDatabase {
-  schemaVersion: 1;
+  schemaVersion: 2;
   activeTaskId: string;
   tasks: EngineeringTaskPackage[];
 }
@@ -29,10 +30,10 @@ export class TaskStore {
     return this.snapshot();
   }
 
-  async createTask(title: string): Promise<TaskWorkspace> {
+  async createTask(input: CreateTaskInput): Promise<TaskWorkspace> {
     return this.mutate(async (database) => {
       const now = new Date().toISOString();
-      const task = createEngineeringTask(randomUUID(), title.trim() || "未命名功能开发任务", now);
+      const task = createEngineeringTask(randomUUID(), input, now);
       database.tasks.unshift(task);
       database.activeTaskId = task.id;
       return this.snapshot(database);
@@ -155,17 +156,22 @@ export class TaskStore {
     await mkdir(dirname(this.filePath), { recursive: true });
     try {
       const raw = await readFile(this.filePath, "utf8");
-      const parsed = JSON.parse(raw) as TaskDatabase;
-      if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.tasks)) throw new Error("unsupported schema");
-      this.database = parsed;
+      const parsed = JSON.parse(raw) as TaskDatabase & { schemaVersion: number };
+      if (!Array.isArray(parsed.tasks)) throw new Error("unsupported schema");
+      this.database = this.migrate(parsed);
+      if (parsed.schemaVersion !== 2) await this.persist(this.database);
     } catch (error) {
       const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
       if (code !== "ENOENT") {
         await rename(this.filePath, `${this.filePath}.corrupt-${Date.now()}`).catch(() => undefined);
       }
       const now = new Date().toISOString();
-      const task = createEngineeringTask(randomUUID(), "保护功能开发任务", now);
-      this.database = { schemaVersion: 1, activeTaskId: task.id, tasks: [task] };
+      const task = createEngineeringTask(randomUUID(), {
+        title: "软件工程协作任务",
+        mode: "workflow",
+        taskType: "功能开发",
+      }, now);
+      this.database = { schemaVersion: 2, activeTaskId: task.id, tasks: [task] };
       await this.persist(this.database);
     }
   }
@@ -174,6 +180,19 @@ export class TaskStore {
     const task = database.tasks.find((item) => item.id === taskId);
     if (!task) throw new Error("工程任务不存在。");
     return task;
+  }
+
+  private migrate(source: TaskDatabase & { schemaVersion: number }): TaskDatabase {
+    return {
+      schemaVersion: 2,
+      activeTaskId: source.activeTaskId,
+      tasks: source.tasks.map((task) => ({
+        ...task,
+        schemaVersion: 2,
+        mode: task.mode ?? "workflow",
+        taskType: task.taskType ?? "功能开发",
+      })),
+    };
   }
 
   private snapshot(database = this.database!): TaskWorkspace {
@@ -211,4 +230,3 @@ export class TaskStore {
     await rename(temporaryPath, this.filePath);
   }
 }
-

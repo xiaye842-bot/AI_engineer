@@ -10,7 +10,11 @@ const previewProviders: ProviderOption[] = [
 
 const listeners = new Set<(event: AgentEvent) => void>();
 let timer: ReturnType<typeof setInterval> | undefined;
-const seededTask = createEngineeringTask("preview-task", "保护功能开发任务", new Date().toISOString());
+const seededTask = createEngineeringTask("preview-task", {
+  title: "软件工程协作任务",
+  mode: "workflow",
+  taskType: "功能开发",
+}, new Date().toISOString());
 let workspace: TaskWorkspace = {
   activeTaskId: seededTask.id,
   tasks: [seededTask],
@@ -70,8 +74,8 @@ function createPreviewAgent(): AgentApi {
 function createPreviewTasks(): TaskApi {
   return {
     initialize: async () => structuredClone(workspace),
-    createTask: async (title) => {
-      const task = createEngineeringTask(crypto.randomUUID(), title, new Date().toISOString());
+    createTask: async (input) => {
+      const task = createEngineeringTask(crypto.randomUUID(), input, new Date().toISOString());
       workspace.tasks.unshift(task);
       workspace.activeTaskId = task.id;
       return structuredClone(workspace);

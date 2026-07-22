@@ -20,15 +20,20 @@ import {
   Settings2,
   ShieldCheck,
   Square,
+  Workflow,
   X,
+  Zap,
 } from "lucide-react";
 import { calculateCompleteness, getStageName } from "../../shared/task-state-machine";
 import {
   TASK_STAGES,
+  TASK_TYPE_OPTIONS,
+  type CreateTaskInput,
   type EngineeringMessage,
   type EngineeringTaskPackage,
   type EvidenceDraft,
   type TaskRequirements,
+  type TaskMode,
   type TaskWorkspace,
 } from "../../shared/task-types";
 import type { AgentEvent, ModelConfig, ProviderOption } from "../../shared/types";
@@ -48,6 +53,12 @@ const emptyEvidence: EvidenceDraft = {
   summary: "",
 };
 
+const emptyNewTask: CreateTaskInput = {
+  title: "",
+  mode: "workflow",
+  taskType: "功能开发",
+};
+
 const requirementLabels: Array<{ key: keyof TaskRequirements; label: string; placeholder: string }> = [
   { key: "functionGoal", label: "功能目标与触发条件", placeholder: "目标、触发条件及预期行为" },
   { key: "productVersion", label: "适用产品及软件版本", placeholder: "产品型号、分支、版本" },
@@ -59,7 +70,8 @@ const agentApi = getAgentApi();
 const taskApi = getTaskApi();
 
 function App() {
-  const previewWorkspace = new URLSearchParams(window.location.search).get("preview") === "workspace";
+  const previewView = new URLSearchParams(window.location.search).get("preview");
+  const previewWorkspace = previewView === "workspace" || previewView === "new-task";
   const [workspace, setWorkspace] = useState<TaskWorkspace | null>(null);
   const [messages, setMessages] = useState<EngineeringMessage[]>([]);
   const [input, setInput] = useState("");
@@ -67,6 +79,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(!previewWorkspace);
   const [evidenceOpen, setEvidenceOpen] = useState(true);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [newTaskOpen, setNewTaskOpen] = useState(previewView === "new-task");
   const [evidenceFormOpen, setEvidenceFormOpen] = useState(false);
   const [providers, setProviders] = useState<ProviderOption[]>([]);
   const [config, setConfig] = useState<ModelConfig>(defaultConfig);
@@ -79,8 +92,10 @@ function App() {
     exceptionStrategy: "",
   });
   const [draftTitle, setDraftTitle] = useState("");
+  const [draftDescription, setDraftDescription] = useState("");
   const [conclusion, setConclusion] = useState("");
   const [evidenceDraft, setEvidenceDraft] = useState<EvidenceDraft>(emptyEvidence);
+  const [newTaskDraft, setNewTaskDraft] = useState<CreateTaskInput>(emptyNewTask);
   const [notice, setNotice] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
   const activeTaskIdRef = useRef("");
@@ -107,6 +122,7 @@ function App() {
     activeStageIdRef.current = currentTask.currentStageId;
     setDraftRequirements(currentTask.requirements);
     setDraftTitle(currentTask.title);
+    setDraftDescription(currentTask.description);
     const stage = currentTask.stages.find((item) => item.id === currentTask.currentStageId);
     setConclusion(stage?.conclusion ?? "");
   }, [currentTask?.id, currentTask?.currentStageId]);
@@ -253,9 +269,12 @@ function App() {
   }
 
   async function createTask() {
-    const next = await taskApi.createTask(`新建功能开发任务 ${workspace ? workspace.tasks.length + 1 : 1}`);
+    const title = newTaskDraft.title.trim() || `${newTaskDraft.taskType}任务 ${(workspace?.tasks.length ?? 0) + 1}`;
+    const next = await taskApi.createTask({ ...newTaskDraft, title });
     await agentApi.resetSession();
     applyWorkspace(next);
+    setNewTaskDraft(emptyNewTask);
+    setNewTaskOpen(false);
     setHistoryOpen(false);
     setNotice("已创建新的工程任务包");
   }
@@ -271,6 +290,11 @@ function App() {
   async function saveTitle() {
     if (!currentTask || !draftTitle.trim() || draftTitle.trim() === currentTask.title) return;
     replaceTask(await taskApi.updateMetadata(currentTask.id, { title: draftTitle }));
+  }
+
+  async function saveDescription() {
+    if (!currentTask || draftDescription === currentTask.description) return;
+    replaceTask(await taskApi.updateMetadata(currentTask.id, { description: draftDescription }));
   }
 
   async function saveRequirement(key: keyof TaskRequirements) {
@@ -327,6 +351,7 @@ function App() {
         <div className="task-heading">
           <span className="task-kicker">当前工程任务</span>
           <span className="task-name">{currentTask.title}</span>
+          <span className={`mode-badge ${currentTask.mode}`}>{currentTask.mode === "workflow" ? "工程流程" : "快速模式"}</span>
           <span className={`task-status ${currentTask.status}`}>{currentTask.status === "completed" ? "已完成" : "进行中"}</span>
         </div>
         <div className="topbar-actions">
@@ -340,7 +365,7 @@ function App() {
       </header>
 
       <aside className="left-rail">
-        <button className="new-task-button" onClick={() => void createTask()}><Plus size={17} /> 新建任务</button>
+        <button className="new-task-button" onClick={() => setNewTaskOpen(true)}><Plus size={17} /> 新建任务</button>
         <nav className="rail-nav" aria-label="主导航">
           <button className="nav-item active"><MessageSquareText size={18} />任务协作</button>
           <button className="nav-item"><Search size={18} />知识检索</button>
@@ -354,23 +379,27 @@ function App() {
           <div className="task-history-list">
             {workspace.tasks.map((task) => (
               <button key={task.id} className={task.id === currentTask.id ? "selected" : ""} onClick={() => void selectTask(task.id)}>
-                <span>{task.title}</span><small>{getStageName(task.currentStageId)}</small>
+                <span>{task.title}</span><small>{task.taskType} · {task.mode === "workflow" ? getStageName(task.currentStageId) : "快速模式"}</small>
               </button>
             ))}
           </div>
         )}
 
-        <div className="stage-section">
-          <div className="section-label">开发流程</div>
-          <ol className="stage-list">
-            {currentTask.stages.map((stage, index) => (
-              <li key={stage.id} className={stage.status}>
-                <span className="stage-index">{stage.status === "completed" ? <Check size={12} /> : index + 1}</span>
-                <span>{TASK_STAGES[index].name}</span>
-              </li>
-            ))}
-          </ol>
-        </div>
+        {currentTask.mode === "workflow" ? (
+          <div className="stage-section">
+            <div className="section-label">工程流程</div>
+            <ol className="stage-list">
+              {currentTask.stages.map((stage, index) => (
+                <li key={stage.id} className={stage.status}>
+                  <span className="stage-index">{stage.status === "completed" ? <Check size={12} /> : index + 1}</span>
+                  <span>{TASK_STAGES[index].name}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        ) : (
+          <div className="quick-mode-panel"><Zap size={17} /><div><strong>常规快速模式</strong><span>上下文与知识材料直接问答</span></div></div>
+        )}
 
         <div className="storage-indicator"><Database size={14} /><span>任务包已持久化</span></div>
         <div className="rail-footer">
@@ -383,7 +412,8 @@ function App() {
       <main className={`workspace ${evidenceOpen ? "with-evidence" : ""}`}>
         <section className="conversation">
           <div className="conversation-toolbar">
-            <div><h1>{getStageName(currentTask.currentStageId)}</h1><p>围绕当前阶段持续协作，并将结论与证据写入任务包</p></div>
+            <div><h1>{currentTask.mode === "workflow" ? getStageName(currentTask.currentStageId) : "快速协作"}</h1>
+              <p>{currentTask.mode === "workflow" ? "围绕当前阶段持续协作，并将结论与证据写入任务包" : "基于任务上下文、历史会话和关联知识材料直接回答"}</p></div>
             <button className="icon-button" title={evidenceOpen ? "收起任务包" : "展开任务包"} onClick={() => setEvidenceOpen((value) => !value)}>
               {evidenceOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
             </button>
@@ -403,7 +433,7 @@ function App() {
               <article key={message.id} className={`message ${message.role}`}>
                 <div className="message-avatar">{message.role === "assistant" ? <Bot size={17} /> : "工"}</div>
                 <div className={`message-body ${message.status === "error" ? "error" : ""}`}>
-                  <div className="message-meta"><strong>{message.role === "assistant" ? "工程伴随 AI" : "工程师"}</strong><span>{getStageName(message.stageId)}</span></div>
+                  <div className="message-meta"><strong>{message.role === "assistant" ? "工程伴随 AI" : "工程师"}</strong><span>{currentTask.mode === "workflow" ? getStageName(message.stageId) : "快速协作"}</span></div>
                   <div className="message-content">{message.content || <span className="typing"><i /><i /><i /></span>}</div>
                 </div>
               </article>
@@ -413,7 +443,7 @@ function App() {
           <form className="composer" onSubmit={submit}>
             <textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={handleKeyDown}
               placeholder="描述功能目标、现场现象或需要澄清的问题..." rows={3} disabled={streaming || currentTask.status === "completed"} />
-            <div className="composer-footer"><span>当前阶段：{getStageName(currentTask.currentStageId)}</span>
+            <div className="composer-footer"><span>{currentTask.mode === "workflow" ? `当前阶段：${getStageName(currentTask.currentStageId)}` : `任务类型：${currentTask.taskType}`}</span>
               {streaming ? (
                 <button className="send-button stop" type="button" title="停止生成" onClick={() => void agentApi.abort()}><Square size={15} fill="currentColor" /></button>
               ) : (
@@ -431,8 +461,14 @@ function App() {
             </div>
 
             <div className="task-title-edit">
-              <label>任务名称</label>
+              <label>任务名称 · {currentTask.taskType}</label>
               <input value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} onBlur={() => void saveTitle()} />
+            </div>
+
+            <div className="task-context-edit">
+              <label>{currentTask.mode === "quick" ? "任务上下文" : "任务说明"}</label>
+              <textarea rows={3} value={draftDescription} placeholder="补充背景、目标、约束或当前问题"
+                onChange={(event) => setDraftDescription(event.target.value)} onBlur={() => void saveDescription()} />
             </div>
 
             <div className="completion-block">
@@ -440,7 +476,7 @@ function App() {
               <div className="progress-track"><span style={{ width: `${completeness}%` }} /></div>
             </div>
 
-            <div className="evidence-section requirement-fields">
+            {currentTask.mode === "workflow" && <div className="evidence-section requirement-fields">
               <h3>关键需求信息</h3>
               {requirementLabels.map((item) => (
                 <label key={item.key}>
@@ -450,10 +486,10 @@ function App() {
                     onBlur={() => void saveRequirement(item.key)} />
                 </label>
               ))}
-            </div>
+            </div>}
 
             <div className="evidence-section">
-              <div className="section-row"><h3>已采集证据 <span>{currentTask.evidence.length}</span></h3>
+              <div className="section-row"><h3>{currentTask.mode === "quick" ? "关联知识与材料" : "已采集证据"} <span>{currentTask.evidence.length}</span></h3>
                 <button title="添加证据" onClick={() => setEvidenceFormOpen((value) => !value)}><Plus size={15} /></button></div>
               {evidenceFormOpen && (
                 <div className="evidence-form">
@@ -473,10 +509,10 @@ function App() {
                 <div className="evidence-list">{currentTask.evidence.slice(0, 5).map((item) => (
                   <div key={item.id}><FileText size={15} /><span><strong>{item.title}</strong><small>{getStageName(item.stageId)} · {item.type}</small></span></div>
                 ))}</div>
-              ) : <div className="empty-state"><FileText size={22} /><span>尚未添加证据材料</span></div>}
+              ) : <div className="empty-state"><FileText size={22} /><span>{currentTask.mode === "quick" ? "尚未关联知识或上下文材料" : "尚未添加证据材料"}</span></div>}
             </div>
 
-            <div className="evidence-section conclusion-editor">
+            {currentTask.mode === "workflow" && <div className="evidence-section conclusion-editor">
               <h3>阶段结论</h3>
               <textarea rows={4} value={conclusion} disabled={currentTask.status === "completed"}
                 placeholder="记录本阶段已确认的结论、依据和遗留风险"
@@ -484,12 +520,39 @@ function App() {
               <button className="advance-button" disabled={currentTask.status === "completed"} onClick={() => void advanceStage()}>
                 {currentStageIndex === TASK_STAGES.length - 1 ? "确认并完成任务" : "确认并进入下一阶段"}<ChevronRight size={15} />
               </button>
-            </div>
+            </div>}
           </aside>
         )}
       </main>
 
       {notice && <button className="toast" onClick={() => setNotice("")}>{notice}<X size={14} /></button>}
+
+      {newTaskOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setNewTaskOpen(false)}>
+          <section className="new-task-modal" role="dialog" aria-modal="true" aria-labelledby="new-task-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-header"><div className="modal-icon"><Plus size={19} /></div>
+              <div><h2 id="new-task-title">创建工程任务</h2><p>选择协作模式和任务类型</p></div>
+              <button className="icon-button compact" title="关闭" onClick={() => setNewTaskOpen(false)}><X size={18} /></button>
+            </div>
+            <div className="new-task-body">
+              <div className="mode-selector">
+                <button className={newTaskDraft.mode === "workflow" ? "selected" : ""} onClick={() => setNewTaskDraft((current) => ({ ...current, mode: "workflow" as TaskMode }))}>
+                  <Workflow size={19} /><span><strong>工程流程模式</strong><small>六阶段推进与人工确认门禁</small></span>
+                </button>
+                <button className={newTaskDraft.mode === "quick" ? "selected" : ""} onClick={() => setNewTaskDraft((current) => ({ ...current, mode: "quick" as TaskMode }))}>
+                  <Zap size={19} /><span><strong>常规快速模式</strong><small>无流程限制，直接协作问答</small></span>
+                </button>
+              </div>
+              <label><span>任务类型</span><select value={newTaskDraft.taskType} onChange={(event) => setNewTaskDraft((current) => ({ ...current, taskType: event.target.value }))}>
+                {TASK_TYPE_OPTIONS.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
+              <label><span>任务名称</span><input autoFocus value={newTaskDraft.title} placeholder={`例如：${newTaskDraft.taskType}任务`}
+                onChange={(event) => setNewTaskDraft((current) => ({ ...current, title: event.target.value }))} /></label>
+            </div>
+            <div className="modal-actions"><button className="secondary-button" onClick={() => setNewTaskOpen(false)}>取消</button>
+              <button className="primary-button" onClick={() => void createTask()}>创建任务</button></div>
+          </section>
+        </div>
+      )}
 
       {settingsOpen && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => configReady && setSettingsOpen(false)}>

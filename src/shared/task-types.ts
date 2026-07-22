@@ -9,6 +9,24 @@ export const TASK_STAGES = [
 
 export type TaskStageId = (typeof TASK_STAGES)[number]["id"];
 export type TaskStageStatus = "locked" | "active" | "completed";
+export type TaskMode = "workflow" | "quick";
+
+export const TASK_TYPE_OPTIONS = [
+  "功能开发",
+  "现场问题分析",
+  "测试分析",
+  "代码评审",
+  "文档与方案",
+  "常规咨询",
+] as const;
+
+export type TaskType = (typeof TASK_TYPE_OPTIONS)[number] | string;
+
+export interface CreateTaskInput {
+  title: string;
+  mode: TaskMode;
+  taskType: TaskType;
+}
 
 export interface TaskStageState {
   id: TaskStageId;
@@ -71,10 +89,12 @@ export interface AuditEntry {
 }
 
 export interface EngineeringTaskPackage {
-  schemaVersion: 1;
+  schemaVersion: 2;
   id: string;
   title: string;
   description: string;
+  mode: TaskMode;
+  taskType: TaskType;
   status: "active" | "completed";
   currentStageId: TaskStageId;
   stages: TaskStageState[];
@@ -100,4 +120,3 @@ export interface StageTransitionResult {
   to?: TaskStageId;
   completed: boolean;
 }
-

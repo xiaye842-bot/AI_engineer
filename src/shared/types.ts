@@ -43,6 +43,7 @@ export interface AgentApi {
 import type {
   EngineeringMessage,
   EngineeringTaskPackage,
+  CreateTaskInput,
   EvidenceDraft,
   StageTransitionResult,
   TaskRequirements,
@@ -52,7 +53,7 @@ import type {
 
 export interface TaskApi {
   initialize: () => Promise<TaskWorkspace>;
-  createTask: (title: string) => Promise<TaskWorkspace>;
+  createTask: (input: CreateTaskInput) => Promise<TaskWorkspace>;
   selectTask: (taskId: string) => Promise<TaskWorkspace>;
   updateMetadata: (
     taskId: string,

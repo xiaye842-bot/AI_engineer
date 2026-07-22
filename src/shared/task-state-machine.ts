@@ -1,12 +1,14 @@
 import type {
   AuditEntry,
+  CreateTaskInput,
   EngineeringTaskPackage,
   StageTransitionResult,
   TaskStageId,
 } from "./task-types.js";
 import { TASK_STAGES } from "./task-types.js";
 
-export function createEngineeringTask(id: string, title: string, now: string): EngineeringTaskPackage {
+export function createEngineeringTask(id: string, input: CreateTaskInput, now: string): EngineeringTaskPackage {
+  const title = input.title.trim() || "未命名工程任务";
   const audit: AuditEntry = {
     id: `${id}-created`,
     action: "task_created",
@@ -16,10 +18,12 @@ export function createEngineeringTask(id: string, title: string, now: string): E
   };
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id,
     title,
     description: "",
+    mode: input.mode,
+    taskType: input.taskType,
     status: "active",
     currentStageId: "requirements",
     stages: TASK_STAGES.map((stage, index) => ({
@@ -51,6 +55,7 @@ export function transitionTask(
   auditId: string,
 ): StageTransitionResult {
   if (source.status === "completed") throw new Error("任务已经完成，不能再次流转。");
+  if (source.mode === "quick") throw new Error("常规快速模式不使用阶段流转。");
   if (conclusion.trim().length < 10) throw new Error("阶段结论至少需要 10 个字符后才能确认流转。");
 
   const currentIndex = TASK_STAGES.findIndex((stage) => stage.id === source.currentStageId);
@@ -95,10 +100,15 @@ export function getStageName(stageId: TaskStageId): string {
 }
 
 export function calculateCompleteness(task: EngineeringTaskPackage): number {
+  if (task.mode === "quick") {
+    const contextScore = task.description.trim() ? 40 : 0;
+    const knowledgeScore = task.evidence.length > 0 ? 40 : 0;
+    const conversationScore = task.messages.length > 0 ? 20 : 0;
+    return contextScore + knowledgeScore + conversationScore;
+  }
   const requirementScore = Object.values(task.requirements).filter((value) => value.trim()).length * 15;
   const evidenceScore = task.evidence.length > 0 ? 15 : 0;
   const conclusionScore = task.stages.some((stage) => stage.conclusion.trim()) ? 15 : 0;
   const progressScore = task.stages.some((stage) => stage.status === "completed") ? 10 : 0;
   return Math.min(100, requirementScore + evidenceScore + conclusionScore + progressScore);
 }
-

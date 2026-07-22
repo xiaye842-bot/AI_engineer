@@ -59,27 +59,40 @@ function buildSystemPrompt(task: EngineeringTaskPackage): string {
     .map((message) => `${message.role === "user" ? "工程师" : "AI"}: ${message.content}`)
     .join("\n");
 
-  return `你是公司软件工程师的工程伴随式 AI 助手。你要围绕单个工程任务持续协作，并帮助形成可追溯的阶段结论。
+  const knowledgeContext = task.evidence
+    .map((item) => `- ${item.title}（${item.type}）：${item.summary || "无摘要"}${item.source ? `；来源：${item.source}` : ""}`)
+    .join("\n");
+  const modeInstruction = task.mode === "workflow"
+    ? `当前采用工程流程模式。围绕“${getStageName(task.currentStageId)}”阶段协作，主动检查阶段信息缺口、风险和证据，并帮助形成可确认的阶段结论。`
+    : "当前采用常规快速模式。没有阶段门禁或流程流转要求，直接回答工程师的问题。回答只能依据当前任务上下文、历史会话和已关联的知识/证据材料；材料不足时明确指出，不要补造内部知识。";
+
+  return `你是公司软件工程师的工程伴随式 AI 助手。你要围绕当前工程任务持续协作。
 
 当前任务：${task.title}
-当前阶段：${getStageName(task.currentStageId)}
+任务类型：${task.taskType}
+工作模式：${task.mode === "workflow" ? "工程流程模式" : "常规快速模式"}
+${task.mode === "workflow" ? `当前阶段：${getStageName(task.currentStageId)}` : ""}
 任务描述：${task.description || "未补充"}
 结构化需求：
 ${requirements}
 
-已有证据：${task.evidence.map((item) => item.title).join("、") || "暂无"}
+已关联知识与证据：
+${knowledgeContext || "暂无"}
 历史对话：
 ${history || "暂无"}
 
-回答应准确、简洁，主动指出信息缺口、假设和风险。没有证据时不要把推测表述为事实。当前未开放代码和命令工具。`;
+${modeInstruction}
+回答应准确、简洁。没有证据时不要把推测表述为事实。当前未开放代码和命令工具。`;
 }
 
 function buildPrompt(task: EngineeringTaskPackage, text: string): string {
   return `[当前工程任务上下文]
 任务：${task.title}
-阶段：${getStageName(task.currentStageId)}
+类型：${task.taskType}
+模式：${task.mode === "workflow" ? "工程流程模式" : "常规快速模式"}
+${task.mode === "workflow" ? `阶段：${getStageName(task.currentStageId)}` : ""}
 需求信息：${JSON.stringify(task.requirements)}
-证据数量：${task.evidence.length}
+知识与证据：${JSON.stringify(task.evidence.map((item) => ({ title: item.title, summary: item.summary, source: item.source })))}
 
 [工程师消息]
 ${text}`;
@@ -252,9 +265,9 @@ function registerAgentIpc(): void {
 
 function registerTaskIpc(): void {
   ipcMain.handle("tasks:initialize", () => taskStore.initialize());
-  ipcMain.handle("tasks:create", async (_event, title: string) => {
+  ipcMain.handle("tasks:create", async (_event, input) => {
     await disposeSession();
-    return taskStore.createTask(title);
+    return taskStore.createTask(input);
   });
   ipcMain.handle("tasks:select", async (_event, taskId: string) => {
     await disposeSession();
@@ -284,6 +297,7 @@ function registerTaskIpc(): void {
 
 function createWindow(): void {
   const capturePath = app.commandLine.getSwitchValue("capture-preview");
+  const captureView = app.commandLine.getSwitchValue("capture-view") || "workspace";
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -317,7 +331,7 @@ function createWindow(): void {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
     void mainWindow.loadFile(join(__dirname, "../renderer/index.html"), {
-      query: capturePath ? { preview: "workspace" } : undefined,
+      query: capturePath ? { preview: captureView } : undefined,
     });
   }
 }
